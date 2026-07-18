@@ -207,27 +207,60 @@ def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], 
     return text_file.name, find_closest_signature(unknown_sig, known_signatures, weights)
 
 
+def file_fingerprint(text_file: Path) -> dict[str, float]:
+    """
+    given a path to a text file
+    return its size and last-modified time
+    used to tell whether a cached signature is still good, or the
+    file has changed since the signature was cached
+    """
+    stat = text_file.stat()
+    return {"size": stat.st_size, "mtime": stat.st_mtime}
+
 def make_known_signatures(labeled_texts_dir: Path, cache_path: Path) -> dict[str, dict[str, float]]:
     """
     given a directory of labeled texts and a path to a signature cache file 
     return dictionary mapping author name to signature
 
-    on the first run this computes a signature for every labeled text
-    (one process per file) and saves the result to cache_path as json
-    on every run after that it just loads the saved json instead of
-    recomputing anything
-    delete the cache file to force a fresh computation, e.g. after
-    adding or changing a labeled text
+    each cache entry is stamped with the fingerprint of the labeled
+    file it came from
+    a labeled text whose fingerprint still matches the cache is loaded
+    straight from cache_path, not recomputed
+    a labeled text that is new, changed, or missing from an older
+    cache is (re)computed, in parallel with any others that also need it
+    this means editing a labeled text (e.g. swapping in the real
+    excerpt) is picked up automatically on the next run, no manual
+    cache deletion needed
     """
-    cached = load_signatures(cache_path)
-    if cached is not None:
-        return cached
+    cache = load_signatures(cache_path) or {}
 
     text_files = sorted(labeled_texts_dir.glob("*.txt"))
-    with ProcessPoolExecutor() as pool:
-        known_signatures = dict(pool.map(_signature_task, text_files))
+    known_signatures = {}
+    to_compute = []
 
-    save_signatures(known_signatures, cache_path)
+    for text_file in text_files:
+        author = text_file.stem
+        fingerprint = file_fingerprint(text_file)
+        cached_entry = cache.get(author)
+        if cached_entry and cached_entry.get("fingerprint") == fingerprint:
+            known_signatures[author] = cached_entry["signature"]
+        else:
+            to_compute.append(text_file)
+
+    if to_compute:
+        with ProcessPoolExecutor() as pool:
+            for author, sig in pool.map(_signature_task, to_compute):
+                known_signatures[author] = sig
+
+    new_cache = {
+        author: {
+            "fingerprint": file_fingerprint(labeled_texts_dir / f"{author}.txt"),
+            "signature": sig,
+        }
+        for author, sig in known_signatures.items()
+    }
+    save_signatures(new_cache, cache_path)
+
     return known_signatures
 
 def find_closest_signature(unknown_sig: dict[str, float], known_sigs: dict[str, dict[str, float]], weights: dict[str, float]) -> Optional[str]:
