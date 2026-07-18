@@ -1,1 +1,7 @@
 # style-distance
+
+unknown1.txt - HOMER - THE ILIAD
+unknown2.txt - JOHN STEINBECK - THE GRAPES OF WRATH 
+unknown3.txt - ERNEST HEMINGWAY - THE SUN ALSO RISES
+unknown4.txt - HERMAN_MELVILLE - THE CONFIDENCE-MAN
+
