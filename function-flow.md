@@ -1,4 +1,4 @@
-# Function flow / FINAL
+# Function Flow
 ```mermaid
 flowchart TD
     %% Functions
