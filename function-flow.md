@@ -1,4 +1,5 @@
-# Function Flow 
+# Function flow / FINAL
+Function flow for the authorship identification program
 ```mermaid
 flowchart TD
     %% Functions
@@ -9,15 +10,15 @@ flowchart TD
     choose_file
     guess_author
     make_known_signatures
-    calculate_weights
     find_closest_signature
     make_signature
     calculate_distance
 
     save_signatures
     load_signatures
+    file_fingerprint
     _signature_task
-    _guess_task
+    _score_task
 
     average_word_length
     different_to_total
@@ -31,29 +32,28 @@ flowchart TD
     clean_word
     split_string
     %% Calls
-    main --> choose_file
     main --> make_known_signatures
-    main --> calculate_weights
+    main --> choose_file
     main --> guess_author
 
     test_all_unknowns --> make_known_signatures
-    test_all_unknowns --> calculate_weights
-    test_all_unknowns --> _guess_task
+    test_all_unknowns --> _score_task
 
     print_all_signatures --> make_known_signatures
     print_all_signatures --> _signature_task
     print_all_signatures --> save_signatures
 
     make_known_signatures --> load_signatures
+    make_known_signatures --> file_fingerprint
     make_known_signatures --> _signature_task
     make_known_signatures --> save_signatures
 
     guess_author --> make_signature
     guess_author --> find_closest_signature
 
-    _guess_task --> make_signature
-    _guess_task --> find_closest_signature
     _signature_task --> make_signature
+    _score_task --> make_signature
+    _score_task --> calculate_distance
 
     find_closest_signature --> calculate_distance
 
