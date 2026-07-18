@@ -12,6 +12,7 @@ flowchart TD
     make_signature
     calculate_distance
     
+    _signature_task
     load_signatures
     save_signatures
     file_fingerprint
@@ -34,11 +35,12 @@ flowchart TD
     
     guess_author --> find_closest_signature
     guess_author --> make_signature
-    make_known_signatures --> make_signature
     
     make_known_signatures --> load_signatures
-    make_known_signatures --> save_signatures
     make_known_signatures --> file_fingerprint
+    make_known_signatures --> _signature_task
+    make_known_signatures --> save_signatures
+    _signature_task --> make_signature
     
     find_closest_signature --> calculate_distance
     make_signature --> average_word_length
