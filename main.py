@@ -1,0 +1,387 @@
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from pathlib import Path
+from typing import Optional
+import json
+import re
+import statistics
+import string
+import sys
+
+
+def split_string(text: str, delimiters: str) -> list[str]:
+    """
+    given a string and a set of delimiters 
+    return list of substrings 
+    split at any delimiter 
+    whitespace removed
+    """
+    parts = re.split(f"[{re.escape(delimiters)}]", text)
+    return [p.strip() for p in parts if p.strip()]
+
+def split_into_sentences(text: str) -> list[str]:
+    """
+    given a text string
+    return list of sentences
+    split at . ! or ?
+    """
+    return split_string(text, ".!?")
+
+def split_into_phrases(sentence: str) -> list[str]:
+    """
+    given a sentence string
+    return list of phrases
+    split at , ; or :
+    """
+    return split_string(sentence, ",;:")
+
+def clean_word(word: str) -> str:
+    """
+    given a string representing a single word, return "cleaned" version 
+    punctuation removed 
+    converted to lowercase
+    """
+    return word.strip(string.punctuation).lower()
+
+def get_clean_words(text: str) -> list[str]:
+    """
+    given a text string, return list of cleaned words 
+    punctuation removed 
+    converted to lowercase
+    """
+    words = text.split()
+    return [clean_word(w) for w in words if clean_word(w)]
+
+def average_word_length(text: str) -> float:
+    """
+    returns the average length of the words in the text
+    """
+    clean_words = get_clean_words(text)
+    if not clean_words:
+        return 0.0
+    total_length = sum(len(word) for word in clean_words)
+    return total_length / len(clean_words)
+
+def different_to_total(text: str) -> float:
+    """
+    given a text string 
+    return ratio of different words to total words
+    """
+    clean_words = get_clean_words(text)
+    total_words = len(clean_words)
+    if total_words == 0:
+        return 0.0
+    different_words = len(set(clean_words))
+    return different_words / total_words
+
+def exactly_once_to_total(text: str) -> float:
+    """
+    returns the ratio of words that occur exactly once to the total number of words
+    """
+    clean_words = get_clean_words(text)
+    total_words = len(clean_words)
+    if total_words == 0:
+        return 0.0
+    word_counts = {}
+    for word in clean_words:
+        word_counts[word] = word_counts.get(word, 0) + 1
+    exactly_once = sum(1 for count in word_counts.values() if count == 1)
+    return exactly_once / total_words
+
+def average_sentence_length(text: str) -> float:
+    """
+    returns the average length of sentences in the text
+    """
+    sentences = split_into_sentences(text)
+    if not sentences:
+        return 0.0
+    total_words = 0.0
+    for sentence in sentences:
+        words = sentence.split()
+        total_words += len(words)
+    return total_words / len(sentences)
+
+def average_sentence_complexity(text: str) -> float:
+    """
+    given a text string 
+    return average number of phrases per sentence
+    """
+    sentences = split_into_sentences(text)
+    if not sentences:
+        return 0.0
+    total_phrases = sum(len(split_into_phrases(sentence))
+                        for sentence in sentences)
+    return total_phrases / len(sentences)
+
+def make_signature(text: str) -> dict[str, float]:
+    """
+    calculate a signature for the text consisting of:
+    average_word_length 
+    different_to_total 
+    exactly_once_to_total 
+    average_sentence_length 
+    average_sentence_complexity    
+    """
+
+    return {
+        "average_word_length": average_word_length(text),
+        "different_to_total": different_to_total(text),
+        "exactly_once_to_total": exactly_once_to_total(text),
+        "average_sentence_length": average_sentence_length(text),
+        "average_sentence_complexity": average_sentence_complexity(text),
+    }
+
+
+def calculate_weights(known_signatures: dict[str, dict[str, float]]) -> dict[str, float]:
+    """
+    given a dictionary of known signatures
+    return a dictionary of feature weights
+
+    a feature that varies a lot from author to author is useful for
+    telling authors apart, so it gets a bigger weight
+    a feature that barely varies from author to author is not useful
+    for telling authors apart, so it gets a small weight
+
+    weight for a feature is 1 divided by the standard deviation of
+    that feature across the known authors
+    this replaces the old fixed weights, so the weights always match
+    whatever labeled texts you are actually using
+    """
+    features = next(iter(known_signatures.values())).keys()
+    new_weights = {}
+    for feature in features:
+        values = [sig[feature] for sig in known_signatures.values()]
+        spread = statistics.pstdev(values)
+        new_weights[feature] = 1 / spread if spread > 0 else 0.0
+    return new_weights
+
+def calculate_distance(sig1: dict[str, float], sig2: dict[str, float], weights: dict[str, float]) -> float:
+    """
+    given two text signatures and a dictionary of feature weights 
+    return weighted distance between them
+    """
+    total = 0.0
+    for feature, weight in weights.items():
+        total += abs(sig1[feature] - sig2[feature]) * weight
+    return total
+
+
+def save_signatures(signatures: dict, path: Path) -> None:
+    """
+    given a dictionary of signatures and a path
+    save the signatures to that path as json
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(signatures, f, indent=2)
+
+def load_signatures(path: Path) -> Optional[dict]:
+    """
+    given a path to a json file of signatures
+    return the signatures, or None if the file does not exist
+    """
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _signature_task(text_file: Path) -> tuple[str, dict[str, float]]:
+    """
+    given a path to a text file
+    return a tuple of its name (without extension) and its signature
+    a plain, top-level function so it can run in a worker process
+    """
+    with open(text_file, "r", encoding="utf-8") as f:
+        text = f.read()
+    return text_file.stem, make_signature(text)
+
+def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> tuple[str, Optional[str]]:
+    """
+    given a path to an unlabeled text file, known signatures, and weights
+    return a tuple of the file name and its guessed author
+    a plain, top-level function so it can run in a worker process
+    """
+    with open(text_file, "r", encoding="utf-8") as f:
+        text = f.read()
+    unknown_sig = make_signature(text)
+    return text_file.name, find_closest_signature(unknown_sig, known_signatures, weights)
+
+
+def make_known_signatures(labeled_texts_dir: Path, cache_path: Path) -> dict[str, dict[str, float]]:
+    """
+    given a directory of labeled texts and a path to a signature cache file 
+    return dictionary mapping author name to signature
+
+    on the first run this computes a signature for every labeled text
+    (one process per file) and saves the result to cache_path as json
+    on every run after that it just loads the saved json instead of
+    recomputing anything
+    delete the cache file to force a fresh computation, e.g. after
+    adding or changing a labeled text
+    """
+    cached = load_signatures(cache_path)
+    if cached is not None:
+        return cached
+
+    text_files = sorted(labeled_texts_dir.glob("*.txt"))
+    with ProcessPoolExecutor() as pool:
+        known_signatures = dict(pool.map(_signature_task, text_files))
+
+    save_signatures(known_signatures, cache_path)
+    return known_signatures
+
+def find_closest_signature(unknown_sig: dict[str, float], known_sigs: dict[str, dict[str, float]], weights: dict[str, float]) -> Optional[str]:
+    """
+    given an unknown signature, a dictionary of known signatures, and feature weights 
+    return name of author with smallest distance
+    """
+    closest_author = None
+    smallest_distance = float("inf")
+    for author, known_sig in known_sigs.items():
+        distance = calculate_distance(unknown_sig, known_sig, weights)
+        if distance < smallest_distance:
+            smallest_distance = distance
+            closest_author = author
+    return closest_author
+
+def guess_author(unlabeled_text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> Optional[str]:
+    """
+    given a file of unknown authorship, known signatures, and feature weights 
+    return name of author whose signature is closest to the unknown text
+    """
+    with open(unlabeled_text_file, "r", encoding="utf-8") as f:
+        unknown_text = f.read()
+
+    unknown_sig = make_signature(unknown_text)
+    return find_closest_signature(unknown_sig, known_signatures, weights)
+
+def choose_file(dir: Path) -> Path:
+    """
+    dir is a Path to a directory
+    returns a Path to a file chosen by the user.
+    """
+    # get a list of the files in the directory
+    texts = sorted(list(dir.iterdir()))
+    # print a list of choices
+    for i, file in enumerate(texts, start=1):
+        print(f"{i}. {file.name}")
+    # loop until we get an acceptable answer
+    while True:
+        try:
+            choice = int(
+                input(f"Please choose a text by number (1-{len(texts)}): "))
+            if choice > 0:
+                return texts[choice - 1]
+        except (ValueError, IndexError):
+            # something went wrong, try again
+            pass
+
+def main(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
+    """
+    labeled_texts_dir is a Path to a directory of labeled texts
+    unlabeled_texts_dir is a Path to a directory of unlabeled texts
+    cache_path is a Path to a json file used to cache known signatures
+    guesses the author of a text chosen by the user from the unlabeled directory.
+    """
+    try:
+        known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
+        weights = calculate_weights(known_signatures)
+
+        text = choose_file(unlabeled_texts_dir)
+        author = guess_author(text, known_signatures, weights)
+        print("=" * 60)
+        print(f"RESULT: {text.name} was written by {author}")
+        print("=" * 60)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def test_all_unknowns(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
+    """
+    labeled_texts_dir is a Path to a directory of labeled texts
+    unlabeled_texts_dir is a Path to a directory of unlabeled texts
+    cache_path is a Path to a json file used to cache known signatures
+
+    guesses the author of every text in the unlabeled directory
+    (one process per file) and prints the results
+    """
+    try:
+        known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
+        weights = calculate_weights(known_signatures)
+
+        text_files = sorted(unlabeled_texts_dir.glob("*.txt"))
+        task = partial(_guess_task, known_signatures=known_signatures, weights=weights)
+        with ProcessPoolExecutor() as pool:
+            results = dict(pool.map(task, text_files))
+
+        print("=" * 60)
+        for name in sorted(results):
+            print(f"{name}: written by {results[name]}")
+        print("=" * 60)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def print_all_signatures(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
+    """
+    labeled_texts_dir is a Path to a directory of labeled texts
+    unlabeled_texts_dir is a Path to a directory of unlabeled texts
+    cache_path is a Path to a json file used to cache known signatures
+
+    prints every known and unknown signature
+    saves all of them together to signatures.json
+    """
+    try:
+        known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
+
+        text_files = sorted(unlabeled_texts_dir.glob("*.txt"))
+        with ProcessPoolExecutor() as pool:
+            unknown_signatures = dict(pool.map(_signature_task, text_files))
+
+        print("Known signatures:")
+        for author, sig in known_signatures.items():
+            print(f"  {author}: {sig}")
+        print("Unknown signatures:")
+        for name, sig in unknown_signatures.items():
+            print(f"  {name}: {sig}")
+
+        out_path = Path("signatures.json")
+        save_signatures({"known": known_signatures, "unknown": unknown_signatures}, out_path)
+        print(f"Saved all signatures to {out_path.resolve()}")
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # check for required arguments and mode
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} texts_directory [--test-all | --print-signatures]", file=sys.stderr)
+        print(f"  Default: Interactive mode (choose unknown file)", file=sys.stderr)
+        print(f"  --test-all: Test all unknown files automatically", file=sys.stderr)
+        print(f"  --print-signatures: Print all signatures and save to JSON", file=sys.stderr)
+        sys.exit(2)
+    
+    texts_dir = Path(sys.argv[1])
+    labeled_dir = texts_dir / "labeled"
+    unlabeled_dir = texts_dir / "unlabeled"
+    cache_path = labeled_dir / "known_signatures.json"
+    
+    # Check for optional mode flag
+    mode = sys.argv[2] if len(sys.argv) > 2 else None
+    
+    if mode == "--test-all":
+        test_all_unknowns(labeled_dir, unlabeled_dir, cache_path)
+    elif mode == "--print-signatures":
+        print_all_signatures(labeled_dir, unlabeled_dir, cache_path)
+    else:
+        # Default: interactive mode
+        main(labeled_dir, unlabeled_dir, cache_path)
