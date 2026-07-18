@@ -1,5 +1,4 @@
-# Function flow / DRAFT
-Function flow for the authorship identification program
+# Function Flow 
 ```mermaid
 flowchart TD
     %% Functions
