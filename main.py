@@ -132,26 +132,57 @@ def make_signature(text: str) -> dict[str, float]:
     }
 
 
-SAMPLE_SIZE = 10000
+CHUNK_SIZE = 5000
 
-def sample_words(text: str, n: int = SAMPLE_SIZE) -> str:
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
     """
-    given a text string and a number of words
-    return just the first n words of the text, joined back together
-
-    different_to_total and exactly_once_to_total naturally shrink as a
-    text gets longer, since an author reuses common words more and
-    more as the word count grows, even with no change in actual style
-    your labeled texts run from about 135 KB to 1.2 MB, so scoring the
-    full text would measure length almost as much as it measures style
-    scoring the same number of words from every text instead makes the
-    comparison fair
-    check that this is comfortably below your shortest labeled or
-    unlabeled text's word count, or you'll be comparing a full text to
-    a truncated one again
+    given a text string and a chunk size in words
+    return a list of chunks, each chunk_size words long
+    any leftover tail shorter than chunk_size is dropped so every
+    chunk we score has the same length
+    if the whole text is shorter than one chunk we just return it as
+    a single chunk, since a short unlabeled excerpt is fine
     """
     words = text.split()
-    return " ".join(words[:n])
+    if len(words) < chunk_size:
+        return [text]
+    return [
+        " ".join(words[i:i + chunk_size])
+        for i in range(0, len(words), chunk_size)
+        if len(words[i:i + chunk_size]) == chunk_size
+    ]
+
+def average_signature(signatures: list[dict[str, float]]) -> dict[str, float]:
+    """
+    given a list of signatures
+    return a signature where each feature is the mean of that feature
+    across every input signature
+    """
+    features = signatures[0].keys()
+    return {
+        feature: sum(sig[feature] for sig in signatures) / len(signatures)
+        for feature in features
+    }
+
+def make_full_signature(text: str) -> dict[str, float]:
+    """
+    given a text string
+    split it into fixed-size chunks
+    score each chunk with make_signature
+    return the mean signature across all chunks
+
+    scoring the whole text as one blob makes different_to_total and
+    exactly_once_to_total shrink for longer texts even when the style
+    is the same, which threw off the classifier when the labeled
+    files ranged from ~135 KB to ~1.2 MB
+    scoring fixed-size chunks and averaging fixes that: every chunk
+    is the same length so those two ratios are comparable across
+    authors, and averaging across chunks means we use the entire text
+    and don't gamble that the first few pages are representative
+    """
+    chunks = chunk_text(text)
+    per_chunk = [make_signature(chunk) for chunk in chunks]
+    return average_signature(per_chunk)
 
 def calculate_weights(known_signatures: dict[str, dict[str, float]]) -> dict[str, float]:
     """
@@ -214,7 +245,7 @@ def _signature_task(text_file: Path) -> tuple[str, dict[str, float]]:
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    return text_file.stem, make_signature(sample_words(text))
+    return text_file.stem, make_full_signature(text)
 
 def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> tuple[str, Optional[str]]:
     """
@@ -224,14 +255,14 @@ def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], 
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    unknown_sig = make_signature(sample_words(text))
+    unknown_sig = make_full_signature(text)
     return text_file.name, find_closest_signature(unknown_sig, known_signatures, weights)
 
 
-# bump this whenever make_signature, sample_words, or SAMPLE_SIZE changes,
-# so a cache built under the old logic is automatically thrown out instead
-# of silently reused
-SIGNATURE_VERSION = 2
+# bump this whenever the signature logic changes (make_signature,
+# make_full_signature, chunk_text, CHUNK_SIZE), so a cache built under
+# the old logic is automatically thrown out instead of silently reused
+SIGNATURE_VERSION = 3
 
 def file_fingerprint(text_file: Path) -> dict[str, float]:
     """
@@ -312,7 +343,7 @@ def guess_author(unlabeled_text_file: Path, known_signatures: dict[str, dict[str
     with open(unlabeled_text_file, "r", encoding="utf-8") as f:
         unknown_text = f.read()
 
-    unknown_sig = make_signature(sample_words(unknown_text))
+    unknown_sig = make_full_signature(unknown_text)
     return find_closest_signature(unknown_sig, known_signatures, weights)
 
 def choose_file(dir: Path) -> Path:
