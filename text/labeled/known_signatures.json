@@ -1,0 +1,54 @@
+{
+  "ernest_hemingway": {
+    "fingerprint": {
+      "size": 135662,
+      "mtime": 1784394814.4830532
+    },
+    "signature": {
+      "average_word_length": 3.8573669467787113,
+      "different_to_total": 0.09643323996265173,
+      "exactly_once_to_total": 0.046013071895424834,
+      "average_sentence_length": 14.037902388369679,
+      "average_sentence_complexity": 1.4179646936656283
+    }
+  },
+  "herman_melville": {
+    "fingerprint": {
+      "size": 1234888,
+      "mtime": 1784394814.4910533
+    },
+    "signature": {
+      "average_word_length": 4.553060812112611,
+      "different_to_total": 0.1025079533653191,
+      "exactly_once_to_total": 0.054717273722644885,
+      "average_sentence_length": 20.00868104172501,
+      "average_sentence_complexity": 3.2048912536171006
+    }
+  },
+  "homer": {
+    "fingerprint": {
+      "size": 705537,
+      "mtime": 1784394814.4960532
+    },
+    "signature": {
+      "average_word_length": 4.139290218795079,
+      "different_to_total": 0.07246595723791038,
+      "exactly_once_to_total": 0.03595731343509029,
+      "average_sentence_length": 27.626239669421487,
+      "average_sentence_complexity": 3.200413223140496
+    }
+  },
+  "john_steinbeck": {
+    "fingerprint": {
+      "size": 458503,
+      "mtime": 1784397368.4559546
+    },
+    "signature": {
+      "average_word_length": 4.11402682131207,
+      "different_to_total": 0.11374894285369096,
+      "exactly_once_to_total": 0.0637791470339495,
+      "average_sentence_length": 13.368983104877271,
+      "average_sentence_complexity": 1.5808096907873765
+    }
+  }
+}
