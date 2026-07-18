@@ -4,10 +4,16 @@ from pathlib import Path
 from typing import Optional
 import json
 import re
-import statistics
 import string
 import sys
 
+weights = {
+    "average_word_length": 11,
+    "different_to_total": 33,
+    "exactly_once_to_total": 50,
+    "average_sentence_length": 0.4,
+    "average_sentence_complexity": 4
+}
 
 def split_string(text: str, delimiters: str) -> list[str]:
     """
@@ -131,85 +137,9 @@ def make_signature(text: str) -> dict[str, float]:
         "average_sentence_complexity": average_sentence_complexity(text),
     }
 
-
-CHUNK_SIZE = 5000
-
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
+def calculate_distance(sig1: dict[str, float], sig2: dict[str, float]) -> float:
     """
-    given a text string and a chunk size in words
-    return a list of chunks, each chunk_size words long
-    any leftover tail shorter than chunk_size is dropped so every
-    chunk we score has the same length
-    if the whole text is shorter than one chunk we just return it as
-    a single chunk, since a short unlabeled excerpt is fine
-    """
-    words = text.split()
-    if len(words) < chunk_size:
-        return [text]
-    return [
-        " ".join(words[i:i + chunk_size])
-        for i in range(0, len(words), chunk_size)
-        if len(words[i:i + chunk_size]) == chunk_size
-    ]
-
-def average_signature(signatures: list[dict[str, float]]) -> dict[str, float]:
-    """
-    given a list of signatures
-    return a signature where each feature is the mean of that feature
-    across every input signature
-    """
-    features = signatures[0].keys()
-    return {
-        feature: sum(sig[feature] for sig in signatures) / len(signatures)
-        for feature in features
-    }
-
-def make_full_signature(text: str) -> dict[str, float]:
-    """
-    given a text string
-    split it into fixed-size chunks
-    score each chunk with make_signature
-    return the mean signature across all chunks
-
-    scoring the whole text as one blob makes different_to_total and
-    exactly_once_to_total shrink for longer texts even when the style
-    is the same, which threw off the classifier when the labeled
-    files ranged from ~135 KB to ~1.2 MB
-    scoring fixed-size chunks and averaging fixes that: every chunk
-    is the same length so those two ratios are comparable across
-    authors, and averaging across chunks means we use the entire text
-    and don't gamble that the first few pages are representative
-    """
-    chunks = chunk_text(text)
-    per_chunk = [make_signature(chunk) for chunk in chunks]
-    return average_signature(per_chunk)
-
-def calculate_weights(known_signatures: dict[str, dict[str, float]]) -> dict[str, float]:
-    """
-    given a dictionary of known signatures
-    return a dictionary of feature weights
-
-    a feature that varies a lot from author to author is useful for
-    telling authors apart, so it gets a bigger weight
-    a feature that barely varies from author to author is not useful
-    for telling authors apart, so it gets a small weight
-
-    weight for a feature is 1 divided by the standard deviation of
-    that feature across the known authors
-    this replaces the old fixed weights, so the weights always match
-    whatever labeled texts you are actually using
-    """
-    features = next(iter(known_signatures.values())).keys()
-    new_weights = {}
-    for feature in features:
-        values = [sig[feature] for sig in known_signatures.values()]
-        spread = statistics.pstdev(values)
-        new_weights[feature] = 1 / spread if spread > 0 else 0.0
-    return new_weights
-
-def calculate_distance(sig1: dict[str, float], sig2: dict[str, float], weights: dict[str, float]) -> float:
-    """
-    given two text signatures and a dictionary of feature weights 
+    given two text signatures 
     return weighted distance between them
     """
     total = 0.0
@@ -217,10 +147,9 @@ def calculate_distance(sig1: dict[str, float], sig2: dict[str, float], weights: 
         total += abs(sig1[feature] - sig2[feature]) * weight
     return total
 
-
 def save_signatures(signatures: dict, path: Path) -> None:
     """
-    given a dictionary of signatures and a path
+    given a dictionary of signatures and a path 
     save the signatures to that path as json
     """
     with open(path, "w", encoding="utf-8") as f:
@@ -228,7 +157,7 @@ def save_signatures(signatures: dict, path: Path) -> None:
 
 def load_signatures(path: Path) -> Optional[dict]:
     """
-    given a path to a json file of signatures
+    given a path to a json file of signatures 
     return the signatures, or None if the file does not exist
     """
     if not path.exists():
@@ -236,59 +165,49 @@ def load_signatures(path: Path) -> Optional[dict]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def file_fingerprint(text_file: Path) -> dict[str, float]:
+    """
+    given a path to a text file 
+    return its size and last-modified time 
+    used to tell whether a cached signature is still good, or the 
+    file has changed since the signature was cached
+    """
+    stat = text_file.stat()
+    return {"size": stat.st_size, "mtime": stat.st_mtime}
 
 def _signature_task(text_file: Path) -> tuple[str, dict[str, float]]:
     """
-    given a path to a text file
-    return a tuple of its name (without extension) and its signature
-    a plain, top-level function so it can run in a worker process
+    given a path to a text file 
+    return a tuple of its name (without extension) and its signature 
+    plain top-level function so it can run in a worker process
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    return text_file.stem, make_full_signature(text)
+    return text_file.stem, make_signature(text)
 
-def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> tuple[str, Optional[str]]:
+def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]]) -> tuple[str, Optional[str]]:
     """
-    given a path to an unlabeled text file, known signatures, and weights
-    return a tuple of the file name and its guessed author
-    a plain, top-level function so it can run in a worker process
+    given a path to an unlabeled text file and known signatures 
+    return a tuple of the file name and its guessed author 
+    plain top-level function so it can run in a worker process
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    unknown_sig = make_full_signature(text)
-    return text_file.name, find_closest_signature(unknown_sig, known_signatures, weights)
-
-
-# bump this whenever the signature logic changes (make_signature,
-# make_full_signature, chunk_text, CHUNK_SIZE), so a cache built under
-# the old logic is automatically thrown out instead of silently reused
-SIGNATURE_VERSION = 3
-
-def file_fingerprint(text_file: Path) -> dict[str, float]:
-    """
-    given a path to a text file
-    return its size, last-modified time, and the current signature version
-    used to tell whether a cached signature is still good: either the
-    file changed since it was cached, or the way signatures are
-    computed changed since it was cached
-    """
-    stat = text_file.stat()
-    return {"size": stat.st_size, "mtime": stat.st_mtime, "version": SIGNATURE_VERSION}
+    unknown_sig = make_signature(text)
+    return text_file.name, find_closest_signature(unknown_sig, known_signatures)
 
 def make_known_signatures(labeled_texts_dir: Path, cache_path: Path) -> dict[str, dict[str, float]]:
     """
     given a directory of labeled texts and a path to a signature cache file 
     return dictionary mapping author name to signature
 
-    each cache entry is stamped with the fingerprint of the labeled
-    file it came from
-    a labeled text whose fingerprint still matches the cache is loaded
-    straight from cache_path, not recomputed
-    a labeled text that is new, changed, or missing from an older
-    cache is (re)computed, in parallel with any others that also need it
-    this means editing a labeled text (e.g. swapping in the real
-    excerpt) is picked up automatically on the next run, no manual
-    cache deletion needed
+    each cache entry is stamped with the fingerprint of the labeled 
+    file it came from 
+    a labeled text whose fingerprint still matches the cache is loaded 
+    straight from cache_path, not recomputed 
+    a labeled text that is new, changed, or missing from the cache is 
+    (re)computed in parallel, one process per file 
+    editing a labeled text is picked up automatically on the next run
     """
     cache = load_signatures(cache_path) or {}
 
@@ -321,30 +240,30 @@ def make_known_signatures(labeled_texts_dir: Path, cache_path: Path) -> dict[str
 
     return known_signatures
 
-def find_closest_signature(unknown_sig: dict[str, float], known_sigs: dict[str, dict[str, float]], weights: dict[str, float]) -> Optional[str]:
+def find_closest_signature(unknown_sig: dict[str, float], known_sigs: dict[str, dict[str, float]]) -> Optional[str]:
     """
-    given an unknown signature, a dictionary of known signatures, and feature weights 
+    given an unknown signature and dictionary of known signatures 
     return name of author with smallest distance
     """
     closest_author = None
     smallest_distance = float("inf")
     for author, known_sig in known_sigs.items():
-        distance = calculate_distance(unknown_sig, known_sig, weights)
+        distance = calculate_distance(unknown_sig, known_sig)
         if distance < smallest_distance:
             smallest_distance = distance
             closest_author = author
     return closest_author
 
-def guess_author(unlabeled_text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> Optional[str]:
+def guess_author(unlabeled_text_file: Path, known_signatures: dict[str, dict[str, float]]) -> Optional[str]:
     """
-    given a file of unknown authorship, known signatures, and feature weights 
+    given a file of unknown authorship and known signatures 
     return name of author whose signature is closest to the unknown text
     """
     with open(unlabeled_text_file, "r", encoding="utf-8") as f:
         unknown_text = f.read()
 
-    unknown_sig = make_full_signature(unknown_text)
-    return find_closest_signature(unknown_sig, known_signatures, weights)
+    unknown_sig = make_signature(unknown_text)
+    return find_closest_signature(unknown_sig, known_signatures)
 
 def choose_file(dir: Path) -> Path:
     """
@@ -376,10 +295,8 @@ def main(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
     """
     try:
         known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
-        weights = calculate_weights(known_signatures)
-
         text = choose_file(unlabeled_texts_dir)
-        author = guess_author(text, known_signatures, weights)
+        author = guess_author(text, known_signatures)
         print("=" * 60)
         print(f"RESULT: {text.name} was written by {author}")
         print("=" * 60)
@@ -396,15 +313,14 @@ def test_all_unknowns(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_
     unlabeled_texts_dir is a Path to a directory of unlabeled texts
     cache_path is a Path to a json file used to cache known signatures
 
-    guesses the author of every text in the unlabeled directory
+    guesses the author of every text in the unlabeled directory 
     (one process per file) and prints the results
     """
     try:
         known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
-        weights = calculate_weights(known_signatures)
 
         text_files = sorted(unlabeled_texts_dir.glob("*.txt"))
-        task = partial(_guess_task, known_signatures=known_signatures, weights=weights)
+        task = partial(_guess_task, known_signatures=known_signatures)
         with ProcessPoolExecutor() as pool:
             results = dict(pool.map(task, text_files))
 
@@ -425,7 +341,7 @@ def print_all_signatures(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cac
     unlabeled_texts_dir is a Path to a directory of unlabeled texts
     cache_path is a Path to a json file used to cache known signatures
 
-    prints every known and unknown signature
+    prints every known and unknown signature 
     saves all of them together to signatures.json
     """
     try:
