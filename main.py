@@ -132,6 +132,27 @@ def make_signature(text: str) -> dict[str, float]:
     }
 
 
+SAMPLE_SIZE = 10000
+
+def sample_words(text: str, n: int = SAMPLE_SIZE) -> str:
+    """
+    given a text string and a number of words
+    return just the first n words of the text, joined back together
+
+    different_to_total and exactly_once_to_total naturally shrink as a
+    text gets longer, since an author reuses common words more and
+    more as the word count grows, even with no change in actual style
+    your labeled texts run from about 135 KB to 1.2 MB, so scoring the
+    full text would measure length almost as much as it measures style
+    scoring the same number of words from every text instead makes the
+    comparison fair
+    check that this is comfortably below your shortest labeled or
+    unlabeled text's word count, or you'll be comparing a full text to
+    a truncated one again
+    """
+    words = text.split()
+    return " ".join(words[:n])
+
 def calculate_weights(known_signatures: dict[str, dict[str, float]]) -> dict[str, float]:
     """
     given a dictionary of known signatures
@@ -193,7 +214,7 @@ def _signature_task(text_file: Path) -> tuple[str, dict[str, float]]:
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    return text_file.stem, make_signature(text)
+    return text_file.stem, make_signature(sample_words(text))
 
 def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], weights: dict[str, float]) -> tuple[str, Optional[str]]:
     """
@@ -203,19 +224,25 @@ def _guess_task(text_file: Path, known_signatures: dict[str, dict[str, float]], 
     """
     with open(text_file, "r", encoding="utf-8") as f:
         text = f.read()
-    unknown_sig = make_signature(text)
+    unknown_sig = make_signature(sample_words(text))
     return text_file.name, find_closest_signature(unknown_sig, known_signatures, weights)
 
+
+# bump this whenever make_signature, sample_words, or SAMPLE_SIZE changes,
+# so a cache built under the old logic is automatically thrown out instead
+# of silently reused
+SIGNATURE_VERSION = 2
 
 def file_fingerprint(text_file: Path) -> dict[str, float]:
     """
     given a path to a text file
-    return its size and last-modified time
-    used to tell whether a cached signature is still good, or the
-    file has changed since the signature was cached
+    return its size, last-modified time, and the current signature version
+    used to tell whether a cached signature is still good: either the
+    file changed since it was cached, or the way signatures are
+    computed changed since it was cached
     """
     stat = text_file.stat()
-    return {"size": stat.st_size, "mtime": stat.st_mtime}
+    return {"size": stat.st_size, "mtime": stat.st_mtime, "version": SIGNATURE_VERSION}
 
 def make_known_signatures(labeled_texts_dir: Path, cache_path: Path) -> dict[str, dict[str, float]]:
     """
@@ -285,7 +312,7 @@ def guess_author(unlabeled_text_file: Path, known_signatures: dict[str, dict[str
     with open(unlabeled_text_file, "r", encoding="utf-8") as f:
         unknown_text = f.read()
 
-    unknown_sig = make_signature(unknown_text)
+    unknown_sig = make_signature(sample_words(unknown_text))
     return find_closest_signature(unknown_sig, known_signatures, weights)
 
 def choose_file(dir: Path) -> Path:
