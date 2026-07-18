@@ -1,5 +1,6 @@
 # Function flow / FINAL
 ```mermaid
+%%{init: {"flowchart": {"rankSpacing": 110, "nodeSpacing": 60}} }%%
 flowchart TD
     %% Functions
     main
@@ -31,6 +32,11 @@ flowchart TD
     split_into_phrases
     clean_word
     split_string
+
+    %% main sits alone on the top level, the two other modes start one level down
+    main ~~~ test_all_unknowns
+    main ~~~ print_all_signatures
+
     %% Calls
     main --> choose_file
     main --> guess_author
@@ -41,16 +47,15 @@ flowchart TD
 
     print_all_signatures --> make_known_signatures
     print_all_signatures --> _signature_task
+    print_all_signatures --> save_signatures
 
-    guess_author --> find_closest_signature
     guess_author --> make_signature
+    guess_author --> find_closest_signature
 
     make_known_signatures --> load_signatures
     make_known_signatures --> file_fingerprint
     make_known_signatures --> save_signatures
     make_known_signatures --> _signature_task
-
-    print_all_signatures --> save_signatures
 
     _score_task --> make_signature
     _score_task --> calculate_distance
