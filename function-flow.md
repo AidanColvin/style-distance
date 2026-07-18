@@ -1,25 +1,26 @@
 # Function flow / FINAL
 ```mermaid
-%%{init: {"flowchart": {"rankSpacing": 110, "nodeSpacing": 60}} }%%
+%%{init: {"flowchart": {"rankSpacing": 120, "nodeSpacing": 70, "curve": "basis"}} }%%
 flowchart TD
     %% Functions
     main
-    test_all_unknowns
-    print_all_signatures
 
     choose_file
     guess_author
-    make_known_signatures
-    _score_task
-    _signature_task
+    test_all_unknowns
+    print_all_signatures
 
+    find_closest_signature
+    _score_task
+    make_known_signatures
+
+    calculate_distance
+    _signature_task
     load_signatures
     file_fingerprint
     save_signatures
-    find_closest_signature
 
     make_signature
-    calculate_distance
 
     average_word_length
     different_to_total
@@ -33,7 +34,7 @@ flowchart TD
     clean_word
     split_string
 
-    %% main sits alone on the top level, the two other modes start one level down
+    %% invisible links: keep main alone and centered on the top level
     main ~~~ test_all_unknowns
     main ~~~ print_all_signatures
 
@@ -42,25 +43,26 @@ flowchart TD
     main --> guess_author
     main --> make_known_signatures
 
-    test_all_unknowns --> make_known_signatures
+    guess_author --> find_closest_signature
+    guess_author --> make_signature
+
     test_all_unknowns --> _score_task
+    test_all_unknowns --> make_known_signatures
 
     print_all_signatures --> make_known_signatures
     print_all_signatures --> _signature_task
     print_all_signatures --> save_signatures
 
-    guess_author --> make_signature
-    guess_author --> find_closest_signature
+    find_closest_signature --> calculate_distance
+    _score_task --> make_signature
+    _score_task --> calculate_distance
 
+    make_known_signatures --> _signature_task
     make_known_signatures --> load_signatures
     make_known_signatures --> file_fingerprint
     make_known_signatures --> save_signatures
-    make_known_signatures --> _signature_task
 
-    _score_task --> make_signature
-    _score_task --> calculate_distance
     _signature_task --> make_signature
-    find_closest_signature --> calculate_distance
 
     make_signature --> average_word_length
     make_signature --> different_to_total
