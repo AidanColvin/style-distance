@@ -307,6 +307,22 @@ def main(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+def _score_task(text_file: Path, known_signatures: dict[str, dict[str, float]]) -> tuple[str, dict[str, float]]:
+    """
+    given a path to an unlabeled text file and known signatures 
+    return a tuple of the file name and a dict of distance to each author 
+    plain top-level function so it can run in a worker process 
+    used by --test-all to show WHY each guess was made, not just what
+    """
+    with open(text_file, "r", encoding="utf-8") as f:
+        text = f.read()
+    unknown_sig = make_signature(text)
+    distances = {
+        author: calculate_distance(unknown_sig, known_sig)
+        for author, known_sig in known_signatures.items()
+    }
+    return text_file.name, distances
+
 def test_all_unknowns(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_path: Path):
     """
     labeled_texts_dir is a Path to a directory of labeled texts
@@ -314,19 +330,38 @@ def test_all_unknowns(labeled_texts_dir: Path, unlabeled_texts_dir: Path, cache_
     cache_path is a Path to a json file used to cache known signatures
 
     guesses the author of every text in the unlabeled directory 
-    (one process per file) and prints the results
+    (one process per file) and prints the results 
+    also prints the weighted distance to every author for every unknown, 
+    so you can see WHY each guess was made, not just what
     """
     try:
         known_signatures = make_known_signatures(labeled_texts_dir, cache_path)
 
         text_files = sorted(unlabeled_texts_dir.glob("*.txt"))
-        task = partial(_guess_task, known_signatures=known_signatures)
+        task = partial(_score_task, known_signatures=known_signatures)
         with ProcessPoolExecutor() as pool:
             results = dict(pool.map(task, text_files))
 
+        authors = sorted(known_signatures.keys())
+        col_width = max(len(a) for a in authors) + 2
+
         print("=" * 60)
+        print("GUESSES:")
         for name in sorted(results):
-            print(f"{name}: written by {results[name]}")
+            winner = min(results[name], key=results[name].get)
+            print(f"  {name}: written by {winner}")
+        print()
+        print("DISTANCES (lower = closer, winner marked *):")
+        header = " " * 18 + " ".join(a.ljust(col_width) for a in authors)
+        print(header)
+        for name in sorted(results):
+            distances = results[name]
+            winner = min(distances, key=distances.get)
+            cells = []
+            for a in authors:
+                mark = "*" if a == winner else " "
+                cells.append(f"{mark}{distances[a]:>6.2f}".ljust(col_width))
+            print(f"  {name:<16}" + " ".join(cells))
         print("=" * 60)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
